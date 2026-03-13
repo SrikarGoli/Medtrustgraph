@@ -21,6 +21,10 @@ public class Query {
 
     private LocalDateTime createdAt;
 
+    @Column(length=5000)
+    private String patientContext; // NEW: Save it to MySQL
+
+    @Column(length = 5000) // NEW: Increased length to prevent data truncation
     private String baselineAnswer;
 
     private String trustGraphAnswer;
@@ -28,6 +32,8 @@ public class Query {
     private Double confidenceScore;
 
     private Boolean isStable;
+    
+    private Boolean hasConflict; 
 
     @Column(length = 5000)
     private String finalAnswer;

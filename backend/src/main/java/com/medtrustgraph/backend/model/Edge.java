@@ -9,24 +9,14 @@ import lombok.*;
 @NoArgsConstructor
 @AllArgsConstructor
 @Builder
-public class Claim {
-
+public class Edge {
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
-    @Column(length = 3000)
-    private String claimText;
-
-    private Double initialTrust;
-
-    private Double finalTrust;
-
-    private Boolean isPruned;
-    
-    private String sourceIndices; 
-
-    private Integer aiNodeId; // NEW: Save the AI's original 0, 1, 2 ID
+    private Integer sourceNode; // Matches aiNodeId
+    private Integer targetNode; // Matches aiNodeId
+    private Integer weight;     // 1 for agreement, -1 for contradiction
 
     @ManyToOne
     @JoinColumn(name = "query_id")

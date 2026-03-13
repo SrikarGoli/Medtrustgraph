@@ -8,4 +8,5 @@ import lombok.*;
 @AllArgsConstructor
 public class QueryRequest {
     private String questionText;
+    private String patientContext;
 }

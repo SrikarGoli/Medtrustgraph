@@ -14,19 +14,35 @@ public class AiService {
 
     private final WebClient.Builder webClientBuilder;
 
-    public AiResponse extractClaims(String text) {
-
-        WebClient webClient = webClientBuilder
-                .baseUrl("http://localhost:8000")
-                .build();
-
-        Map<String, String> requestBody = Map.of("text", text);
+    public AiResponse extractClaims(String text, String patientContext) {
+        WebClient webClient = webClientBuilder.baseUrl("http://localhost:8000").build();
+        
+        // Send BOTH fields to Python!
+        Map<String, String> requestBody = Map.of(
+            "text", text,
+            "patient_context", patientContext != null ? patientContext : ""
+        );
 
         return webClient.post()
-                .uri("/extract-claims")
-                .bodyValue(requestBody)
-                .retrieve()
-                .bodyToMono(AiResponse.class)
-                .block();
+            .uri("/extract-claims")
+            .bodyValue(requestBody)
+            .retrieve()
+            .bodyToMono(AiResponse.class)
+            .timeout(java.time.Duration.ofSeconds(240)) 
+            .block();
+    }
+    // NEW: Call the baseline endpoint
+    public String getBaselineAnswer(String text) {
+        WebClient webClient = webClientBuilder.baseUrl("http://localhost:8000").build();
+        Map<String, String> requestBody = Map.of("text", text);
+
+        Map response = webClient.post()
+            .uri("/baseline-rag")
+            .bodyValue(requestBody)
+            .retrieve()
+            .bodyToMono(Map.class)
+            .block();
+
+        return (String) response.get("answer");
     }
 }
