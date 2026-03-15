@@ -37,4 +37,21 @@ public class Query {
 
     @Column(length = 5000)
     private String finalAnswer;
+
+    // ... existing fields (questionText, baselineAnswer, finalAnswer, etc.) ...
+    
+    @Column(name = "patient_age")
+    private String age;
+
+    @Column(name = "patient_gender")
+    private String gender;
+
+    @Column(columnDefinition = "TEXT")
+    private String diseases;
+
+    @Column(columnDefinition = "TEXT")
+    private String hereditary;
+
+    @Column(columnDefinition = "TEXT")
+    private String habits;
 }

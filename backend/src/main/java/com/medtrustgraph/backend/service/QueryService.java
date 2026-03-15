@@ -30,7 +30,11 @@ public class QueryService {
     public Query startQueryProcess(QueryRequest request) {
         Query query = Query.builder()
             .questionText(request.getQuestionText())
-            .patientContext(request.getPatientContext())
+            .age(request.getAge())
+            .gender(request.getGender())
+            .diseases(request.getDiseases())
+            .hereditary(request.getHereditary())
+            .habits(request.getHabits())
             .createdAt(LocalDateTime.now())
             .finalAnswer("Processing... Gathering medical evidence.") // Initial state
             .build();
@@ -38,26 +42,37 @@ public class QueryService {
         Query savedQuery = queryRepository.save(query);
         
         // Kick off the background job
-        processAiDataAsync(savedQuery.getId(), request.getQuestionText(),request.getPatientContext());
+        processAiDataAsync(savedQuery.getId(), request.getQuestionText(),request.getAge(),request.getGender(),request.getDiseases(),request.getHereditary(),request.getHabits());
         
         return savedQuery; // Returns in milliseconds!
     }
 
     // 2. Asynchronous method: Runs on a separate background thread
+    // 2. Asynchronous method: Runs on a separate background thread
     @Async
-    public void processAiDataAsync(Long queryId, String questionText, String patientContext) {
+    public void processAiDataAsync(Long queryId, String questionText, String age, String gender, String diseases, String hereditary, String habits) {
         try {
             // 1. Fetch the Standard Baseline Answer (Fast)
-            String baselineAnswer = aiService.getBaselineAnswer(questionText);
+            // Note: If your getBaselineAnswer method in AiService was also updated to take the new fields, 
+            // you should pass them here. Otherwise, leave it as is if it only takes questionText.
+            // 1. Fetch the Standard Baseline Answer (Fast)
+            String baselineAnswer = aiService.getBaselineAnswer(questionText, age, gender, diseases, hereditary, habits);
             
-            // 2. Fetch the MedTrustGraph Answer (Takes 15-20 seconds)
-            AiResponse aiResponse = aiService.extractClaims(questionText, patientContext);
+            // 2. ROUTING LOGIC: Choose the right AI process!
+            AiResponse aiResponse;
+            if (questionText.startsWith("RADAR_QUERY:")) {
+                // Call the new Interaction Graph Endpoint
+                aiResponse = aiService.analyzeInteractions(questionText, age, gender, diseases, hereditary, habits);
+            } else {
+                // Call the standard Clinical Graph Endpoint
+                aiResponse = aiService.extractClaims(questionText, age, gender, diseases, hereditary, habits);
+            }
 
-            // Fetch the pending query from the database
+            // Fetch the pending query from the database...
             Query queryToUpdate = queryRepository.findById(queryId).orElseThrow();
 
             // Update with BOTH results for comparison!
-            queryToUpdate.setBaselineAnswer(baselineAnswer); // NEW: Save the baseline
+            queryToUpdate.setBaselineAnswer(baselineAnswer); 
             
             queryToUpdate.setIsStable(aiResponse.getIs_stable());
             queryToUpdate.setHasConflict(aiResponse.getHas_conflict());
