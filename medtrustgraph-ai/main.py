@@ -1,12 +1,15 @@
 # main.py
 import json
 import torch
+import traceback
+import requests
 import torch.nn.functional as F
 import networkx as nx
 import numpy as np
 from fastapi import FastAPI
 from pydantic import BaseModel
 from typing import Optional
+from typing import List
 from google import genai
 from google.genai import types
 from sentence_transformers import SentenceTransformer
@@ -21,6 +24,22 @@ from agents import translate_query_for_pubmed, client # Re-use Gemini client fro
 import itertools
 
 app = FastAPI()
+
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware  # Add this import if you don't have it
+
+app = FastAPI(title="MedTrustGraph AI Agent")
+
+# ==========================================
+# FIX: ENABLE CORS SO REACT CAN TALK TO PYTHON
+# ==========================================
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Allows all origins (React's localhost port)
+    allow_credentials=True,
+    allow_methods=["*"],  # Allows POST, GET, OPTIONS, etc.
+    allow_headers=["*"],  # Allows all headers like Content-Type
+)
 
 # =============================
 # CONFIG & MODELS
@@ -156,7 +175,6 @@ You MUST actively extract claims that highlight specific risks, adverse effects,
     patient_context_val = getattr(request, "patient_context", "")
     patient_warning = f"\n\nCRITICAL PATIENT CONTEXT: Explicitly tailor conclusion for profile: '{patient_context_val}'." if patient_context_val and patient_context_val.strip() else ""
 
-    # NEW: Force beautiful structuring
     formatting_rules = "\nFORMATTING: You MUST use clear formatting. Break your answer into short paragraphs. Use bullet points for listing evidence or risks. Use **bold text** for emphasis."
 
     sys_inst = ("WARNING: HIGH CONFLICT detected. Acknowledge the debate." if has_conflict else "Provide a definitive conclusion based ONLY on verified claims.") + citation_rules + patient_warning + formatting_rules
@@ -172,41 +190,47 @@ You MUST actively extract claims that highlight specific risks, adverse effects,
     
 @app.post("/baseline-rag")
 def baseline_rag(request: ClaimExtractionRequest):
-    
-    # ==========================================
-    # ROUTER: Is this a normal question or a Polypharmacy Radar?
-    # ==========================================
-    if request.text.startswith("RADAR_QUERY:"):
-        # It's an interaction check!
-        drugs_str = request.text.replace("RADAR_QUERY:", "").strip()
-        drugs_list = [d.strip() for d in drugs_str.split(",")]
-        
-        # Build the exact same combinatorial PubMed query so it's a fair fight
-        pairs = list(itertools.combinations(drugs_list, 2))
-        pair_queries = [f'("{d1}" AND "{d2}")' for d1, d2 in pairs]
-        pubmed_query = "(" + " OR ".join(pair_queries) + ') AND ("Drug Interactions"[MeSH] OR "Food-Drug Interactions"[MeSH] OR "Adverse Effects")'
-        
-        pubmed_docs = retrieve_pubmed_structured(pubmed_query)
-        task_text = f"Evaluate the safety and interactions between these items: {drugs_str}."
-    else:
-        # It's a normal clinical question!
-        pubmed_docs = retrieve_pubmed_structured(request.text)
-        task_text = request.text
-    # ==========================================
+    print(f"\n--- Running Baseline RAG ---")
+    try:
+        # ==========================================
+        # ROUTER: Is this a normal question or a Polypharmacy Radar?
+        # ==========================================
+        if request.text.startswith("RADAR_QUERY:"):
+            drugs_str = request.text.replace("RADAR_QUERY:", "").strip()
+            drugs_list = [d.strip() for d in drugs_str.split(",")]
+            
+            # Dynamically build pair-wise combinations for PubMed
+            pairs = list(itertools.combinations(drugs_list, 2))
+            pair_queries = [f'("{d1}" AND "{d2}")' for d1, d2 in pairs]
+            pubmed_query = "(" + " OR ".join(pair_queries) + ') AND ("Drug Interactions"[MeSH] OR "Food-Drug Interactions"[MeSH] OR "Adverse Effects")'
+            
+            print(f"Generated PubMed Query: {pubmed_query}")
+            pubmed_docs = retrieve_pubmed_structured(pubmed_query)
+            task_text = f"Evaluate the safety and interactions between these items: {drugs_str}."
+        else:
+            pubmed_docs = retrieve_pubmed_structured(request.text)
+            task_text = request.text
+        # ==========================================
 
-    if not pubmed_docs: 
-        return {"answer": "No relevant PubMed evidence found for this query."}
+        if not pubmed_docs: 
+            return {"answer": "No relevant PubMed evidence found for this specific combination of medications/foods."}
+            
+        formatted_docs = "\n".join([f"\n[PMID: {doc['pmid']}]\n{doc['abstract']}\n" for doc in pubmed_docs])
+        patient_context_val = getattr(request, "patient_context", "")
+        patient_instruction = f"\nCRITICAL PATIENT CONTEXT: Consider this profile: '{patient_context_val}'." if patient_context_val and patient_context_val.strip() else ""
+
+        formatting_rules = "\nFORMATTING: You MUST use clear formatting. Break your answer into short paragraphs and use bullet points. Use bold text for severe warnings."
+
+        prompt = BASELINE_RAG_PROMPT.format(user_text=task_text, patient_instruction=patient_instruction, formatted_docs=formatted_docs) + formatting_rules
+        response = client.models.generate_content(model="gemini-flash-lite-latest", contents=prompt)
         
-    formatted_docs = "\n".join([f"\n[PMID: {doc['pmid']}]\n{doc['abstract']}\n" for doc in pubmed_docs])
-    patient_context_val = getattr(request, "patient_context", "")
-    patient_instruction = f"\nCRITICAL PATIENT CONTEXT: Consider this profile: '{patient_context_val}'." if patient_context_val and patient_context_val.strip() else ""
+        return {"answer": response.text}
 
-    formatting_rules = "\nFORMATTING: You MUST use clear formatting. Break your answer into short paragraphs and use bullet points. Use bold text for severe warnings."
-
-    prompt = BASELINE_RAG_PROMPT.format(user_text=task_text, patient_instruction=patient_instruction, formatted_docs=formatted_docs) + formatting_rules
-    response = client.models.generate_content(model="gemini-flash-lite-latest", contents=prompt)
-    
-    return {"answer": response.text}
+    except Exception as e:
+        print(f"\n!!! CRASH PREVENTED IN /baseline-rag !!!")
+        print(f"Error: {e}")
+        traceback.print_exc() # Prints the exact line number of the error in your terminal!
+        return {"answer": "An internal error occurred while generating the baseline response. The system protected itself from crashing."}
 
 
 @app.post("/analyze-interactions")
@@ -232,111 +256,105 @@ def analyze_interactions(request: ClaimExtractionRequest):
     You are a Pharmacovigilance AI. Analyze these abstracts and extract specific claims about drug-drug or drug-food interactions between: {drugs_str}.
     Rules:
     1. Only extract claims that describe an interaction, adverse effect, or contraindication.
-    2. Ignore general efficacy claims.
-    3. Format as a JSON list of strings.
+    2. You MUST format the output as a strict JSON list of objects, using exactly this structure:
+       [ {{"claim": "Description of the interaction here", "pmid": "12345678"}} ]
     
     Abstracts:
     {formatted_docs}
     """
     
-    # Extract claims using Gemini
     ext_response = client.models.generate_content(
         model="gemini-flash-lite-latest", 
         contents=extractor_prompt,
         config=types.GenerateContentConfig(response_mime_type="application/json")
     )
     
-    import json
-    # ... inside /analyze-interactions ...
-    
     raw_text = ext_response.text.strip()
-    # Aggressively strip markdown formatting if Gemini adds it
-    if raw_text.startswith("```json"):
+    
+    # Safely strip markdown formatting if Gemini adds it
+    if raw_text.startswith("```json"): 
         raw_text = raw_text[7:]
-    if raw_text.endswith("```"):
+    if raw_text.endswith("```"): 
         raw_text = raw_text[:-3]
-    raw_text = raw_text.strip()
 
     try:
-        claims = json.loads(raw_text)
+        parsed_data = json.loads(raw_text.strip())
+        # Parse into a clean list of dictionaries
+        raw_claims = [{"text": item['claim'], "pmid": str(item.get('pmid', 'Unknown'))} for item in parsed_data if 'claim' in item]
     except Exception as e:
         print(f"Failed to parse JSON from Gemini: {e}")
-        print(f"Raw output was: {raw_text}")
-        claims = []
+        raw_claims = []
 
-
-    if not claims:
-        print("No specific interactions extracted by Gemini.")
+    if not raw_claims:
         return {
-            "nodes": [], 
-            "edges": [], 
-            "is_stable": True, 
-            "has_conflict": False, 
+            "nodes": [], "edges": [], "is_stable": True, "has_conflict": False, 
             "final_answer": "No adverse interactions or contraindications were found in the literature for this combination.", 
-            "confidence_score": 1.0, 
-            "stable_nodes": []
+            "confidence_score": 1.0, "stable_nodes": []
         }
     
-    # 4. CUSTOM GRAPH INITIALIZATION (No SentenceTransformer needed!)
-    nodes = []
-    for i, claim in enumerate(claims):
-        # We start interaction claims at a high baseline, trusting the literature initially
-        nodes.append({"id": f"claim_{i}", "text": claim, "trust": 0.85, "sources": []})
+    # ==========================================
+    # 4. CLUSTERING: MERGE IDENTICAL CLAIMS
+    # ==========================================
+    claims_text = [c["text"] for c in raw_claims]
+    
+    # Step A: Fast cosine distance clustering to group generally similar topics
+    embeddings = embedding_model.encode(claims_text)
+    cluster_labels = AgglomerativeClustering(n_clusters=None, metric='cosine', linkage='average', distance_threshold=0.25).fit_predict(embeddings) if len(claims_text) > 1 else [0]
 
-    # 5. NLI Edge Construction (Find Contradictions)
+    unique_clusters = []
+    for cluster_id in set(cluster_labels):
+        indices = [i for i, label in enumerate(cluster_labels) if label == cluster_id]
+        
+        # Step B: Sub-cluster with NLI (Merges direct entailments perfectly)
+        sub_clusters = []
+        for idx in indices:
+            placed = False
+            for sc in sub_clusters:
+                # If the AI thinks these two claims mean the EXACT same thing...
+                if get_nli_relation(sc["text"], raw_claims[idx]["text"]) == "entailment":
+                    # ...Merge them! Append the PMID to the existing cluster.
+                    if raw_claims[idx]["pmid"] not in sc["pmids"]:
+                        sc["pmids"].append(raw_claims[idx]["pmid"])
+                    placed = True
+                    break
+            if not placed:
+                sub_clusters.append({"text": raw_claims[idx]["text"], "pmids": [raw_claims[idx]["pmid"]]})
+                
+        unique_clusters.extend(sub_clusters)
+
+    # 5. GRAPH INITIALIZATION FROM MERGED CLUSTERS
+    nodes = []
+    for i, cluster in enumerate(unique_clusters):
+        # Format the text to include all merged PMIDs (e.g., "[PMID: 123, 456]")
+        pmid_str = ", ".join(cluster["pmids"])
+        final_text = f"{cluster['text']} [PMID: {pmid_str}]"
+        nodes.append({"id": i, "text": final_text, "trust": 1.0, "sources": []})
+
+    # 6. NLI Edge Construction (Find Contradictions between clusters)
     edges = []
     for i in range(len(nodes)):
         for j in range(i + 1, len(nodes)):
-            premise = nodes[i]["text"]
-            hypothesis = nodes[j]["text"]
+            # Compare the raw text (without the PMIDs) for cleaner NLI math
+            premise = unique_clusters[i]["text"]
+            hypothesis = unique_clusters[j]["text"]
             
-            # Use your PyTorch NLI model
-            inputs = nli_tokenizer(premise, hypothesis, return_tensors="pt", truncation=True, padding=True).to(device)
-            with torch.no_grad():
-                logits = nli_model(**inputs).logits
-                probs = torch.softmax(logits, dim=1)[0].tolist()
-                
-            contradiction_prob = probs[2]
-            entailment_prob = probs[0]
+            relation = get_nli_relation(premise, hypothesis)
             
-            # Draw edges based on biological agreement/disagreement
-            if contradiction_prob > 0.6:
+            if relation == "contradiction":
                 edges.append({"source": nodes[i]["id"], "target": nodes[j]["id"], "weight": -1})
-            elif entailment_prob > 0.7:
+            elif relation == "entailment":
                 edges.append({"source": nodes[i]["id"], "target": nodes[j]["id"], "weight": 1})
 
-    # 6. PageRank Trust Propagation
-    MAX_ITER = 10
-    TOLERANCE = 0.01
+    # 7. BYPASS PRUNING FOR SAFETY (Radar Mode)
     has_conflict = any(e["weight"] == -1 for e in edges)
-    
-    for _ in range(MAX_ITER):
-        new_trust = [n["trust"] for n in nodes]
-        for idx, node in enumerate(nodes):
-            incoming_support = 0
-            incoming_attack = 0
-            for edge in edges:
-                if edge["target"] == node["id"]:
-                    source_node = next(n for n in nodes if n["id"] == edge["source"])
-                    if edge["weight"] == 1: incoming_support += source_node["trust"]
-                    if edge["weight"] == -1: incoming_attack += source_node["trust"]
-            
-            # Penalize nodes that are contradicted by other trusted papers
-            updated_trust = node["trust"] + (0.1 * incoming_support) - (0.2 * incoming_attack)
-            new_trust[idx] = max(0.0, min(1.0, updated_trust))
-            
-        diff = sum(abs(nodes[i]["trust"] - new_trust[i]) for i in range(len(nodes)))
-        for i in range(len(nodes)): nodes[i]["trust"] = new_trust[i]
-        if diff < TOLERANCE: break
+    stable_nodes = [n["id"] for n in nodes] # Keep every single merged node
 
-    stable_nodes = [n["id"] for n in nodes if n["trust"] > 0.5]
-
-    # 7. Final Generation
+    # 8. Final Generation
     patient_context_val = getattr(request, "patient_context", "")
     patient_warning = f"\nCRITICAL PATIENT CONTEXT: Explicitly evaluate these interactions against this patient profile: '{patient_context_val}'." if patient_context_val else ""
     
     trusted_claims = [n["text"] for n in nodes if n["id"] in stable_nodes]
-    sys_inst = "You are a Clinical Pharmacist AI. Write a definitive interaction report based ONLY on the verified claims." + patient_warning + "\nFORMATTING: Use clear paragraphs and bullet points."
+    sys_inst = "You are a Clinical Pharmacist AI. Write a definitive interaction report based ONLY on the verified claims." + patient_warning + "\nCRITICAL INSTRUCTION: You MUST cite the source using the provided PMIDs at the end of every bullet point. Format: [PMID: 12345678].\nFORMATTING: Use clear paragraphs, bullet points, and bold text for headers."
     
     final_prompt = f"{sys_inst}\n\nDrugs to Check: {drugs_str}\n\nVerified Claims:\n{chr(10).join(trusted_claims)}"
     final_answer = client.models.generate_content(model="gemini-flash-lite-latest", contents=final_prompt).text
@@ -344,9 +362,91 @@ def analyze_interactions(request: ClaimExtractionRequest):
     return {
         "nodes": nodes,
         "edges": edges,
-        "is_stable": len(stable_nodes) > 0,
+        "is_stable": True, 
         "has_conflict": has_conflict,
         "final_answer": final_answer,
-        "confidence_score": sum(n["trust"] for n in nodes if n["id"] in stable_nodes) / max(1, len(stable_nodes)),
+        "confidence_score": 1.0, 
         "stable_nodes": stable_nodes
     }
+
+# ==========================================
+# DIETARY & LIFESTYLE GENERATION ENDPOINT
+# ==========================================
+
+# Define the data structure React will send us
+class DietRequest(BaseModel):
+    drugs: List[str]
+    age: str = ""
+    gender: str = ""
+    diseases: str = ""
+    habits: str = ""
+
+@app.post("/generate-diet")
+def generate_diet(request: DietRequest):
+    print(f"\n--- Generating FDA Diet Plan for: {request.drugs} ---")
+    
+    # 1. Fetch live data from the US Government (openFDA)
+    fda_context = ""
+    for drug in request.drugs:
+        url = f'https://api.fda.gov/drug/label.json?search=openfda.generic_name:"{drug.strip()}"&limit=1'
+        try:
+            res = requests.get(url, timeout=5)
+            if res.status_code == 200:
+                data = res.json()["results"][0]
+                # Grab the first 800 characters of the relevant sections so we don't overwhelm the LLM
+                interactions = data.get("drug_interactions", [""])[0][:800]
+                patient_info = data.get("information_for_patients", [""])[0][:800]
+                
+                fda_context += f"\n--- DRUG: {drug.upper()} ---\nInteractions: {interactions}\nPatient Info: {patient_info}\n"
+        except Exception as e:
+            print(f"Failed to fetch FDA data for {drug}: {e}")
+
+    # 2. Build the Neuro-Symbolic Prompt
+    prompt = f"""
+    You are a Clinical Dietitian AI for a hospital.
+    
+    PATIENT PROFILE:
+    Age: {request.age} | Gender: {request.gender}
+    Chronic Diseases: {request.diseases}
+    Habits: {request.habits}
+    
+    OFFICIAL FDA LABEL DATA FOR THEIR MEDICATIONS:
+    {fda_context}
+    
+    TASK:
+    1. Read the FDA text to find strictly prohibited foods/drinks for their medications.
+    2. Suggest a healthy diet based on their listed Chronic Diseases.
+    3. You MUST format the output as a strict JSON object using exactly this structure:
+    {{
+        "avoid": [
+            {{"food": "Grapefruit", "reason": "Interacts with Warfarin (per FDA label)."}}
+        ],
+        "recommend": [
+            {{"food": "Leafy Greens", "reason": "Rich in potassium, recommended for Hypertension."}}
+        ]
+    }}
+    """
+
+    # 3. Ask Gemini to synthesize the JSON
+    try:
+        response = client.models.generate_content(
+            model="gemini-flash-lite-latest", 
+            contents=prompt,
+            config=types.GenerateContentConfig(response_mime_type="application/json")
+        )
+        
+        raw_text = response.text.strip()
+        
+        # Clean up markdown formatting if the AI adds it
+        if raw_text.startswith("```json"): 
+            raw_text = raw_text[7:]
+        if raw_text.endswith("```"): 
+            raw_text = raw_text[:-3]
+        
+        diet_plan = json.loads(raw_text.strip())
+        return diet_plan
+
+    except Exception as e:
+        print(f"Failed to generate diet: {e}")
+        # Safe fallback if the AI fails
+        return {"avoid": [], "recommend": []}

@@ -3,7 +3,7 @@ from google import genai
 from prompts import QUERY_TRANSLATOR_PROMPT
 
 # NOTE: Paste your actual API Key here
-GEMINI_API_KEY = "AIzaSyCK5A-7WeTB12rR1jXifSHpu7CFj8C6IGs"
+GEMINI_API_KEY = ""
 client = genai.Client(api_key=GEMINI_API_KEY)
 
 def translate_query_for_pubmed(raw_query: str) -> str:
