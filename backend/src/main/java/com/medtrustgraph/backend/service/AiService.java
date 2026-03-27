@@ -6,6 +6,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.web.reactive.function.client.WebClient;
 
 import java.time.Duration;
+import java.util.HashMap;
 import java.util.Map;
 
 @Service
@@ -25,14 +26,28 @@ public class AiService {
         return contextBuilder.toString().trim();
     }
 
+    // NEW HELPER: Safely builds the JSON request body with ALL discrete fields for Python Phase 1
+    private Map<String, Object> buildRequestBody(String text, String finalPatientContext, String age, String gender, String diseases, String hereditary, String habits) {
+        Map<String, Object> requestBody = new HashMap<>();
+        requestBody.put("text", text);
+        requestBody.put("patient_context", finalPatientContext);
+        
+        // Passing the specific fields directly to Python's Pydantic model (Handling nulls safely)
+        requestBody.put("age", age != null ? age : "");
+        requestBody.put("gender", gender != null ? gender : "");
+        requestBody.put("diseases", diseases != null ? diseases : "");
+        requestBody.put("hereditary", hereditary != null ? hereditary : "");
+        requestBody.put("habits", habits != null ? habits : "");
+        
+        return requestBody;
+    }
+
     public AiResponse extractClaims(String text, String age, String gender, String diseases, String hereditary, String habits) {
         String finalPatientContext = buildPatientContextString(age, gender, diseases, hereditary, habits);
         WebClient webClient = webClientBuilder.baseUrl("http://localhost:8000").build();
         
-        Map<String, String> requestBody = Map.of(
-            "text", text,
-            "patient_context", finalPatientContext
-        );
+        // USING THE NEW HELPER
+        Map<String, Object> requestBody = buildRequestBody(text, finalPatientContext, age, gender, diseases, hereditary, habits);
 
         return webClient.post()
             .uri("/extract-claims")
@@ -47,13 +62,11 @@ public class AiService {
         String finalPatientContext = buildPatientContextString(age, gender, diseases, hereditary, habits);
         WebClient webClient = webClientBuilder.baseUrl("http://localhost:8000").build();
         
-        Map<String, String> requestBody = Map.of(
-            "text", text,
-            "patient_context", finalPatientContext
-        );
+        // USING THE NEW HELPER
+        Map<String, Object> requestBody = buildRequestBody(text, finalPatientContext, age, gender, diseases, hereditary, habits);
 
         return webClient.post()
-            .uri("/analyze-interactions") // POINTS TO THE NEW PYTHON ENDPOINT
+            .uri("/analyze-interactions") 
             .bodyValue(requestBody)
             .retrieve()
             .bodyToMono(AiResponse.class)
@@ -66,10 +79,8 @@ public class AiService {
         String finalPatientContext = buildPatientContextString(age, gender, diseases, hereditary, habits);
         WebClient webClient = webClientBuilder.baseUrl("http://localhost:8000").build();
         
-        Map<String, String> requestBody = Map.of(
-            "text", text,
-            "patient_context", finalPatientContext
-        );
+        // USING THE NEW HELPER
+        Map<String, Object> requestBody = buildRequestBody(text, finalPatientContext, age, gender, diseases, hereditary, habits);
 
         try {
             Map response = webClient.post()

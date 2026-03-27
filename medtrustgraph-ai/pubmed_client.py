@@ -1,12 +1,93 @@
 # pubmed_client.py
 import requests
 import xml.etree.ElementTree as ET
+from prompts import QUERY_TRANSLATOR_PROMPT
+
+import time
+
+# Local memory cache to prevent duplicate PubMed API calls
+PUBMED_MEMORY_CACHE = {}
+
+def fetch_combined_pubmed_evidence(base_query: str, patient_data: dict) -> list:
+    """
+    Fetches papers for the general query AND the specific patient query, 
+    then merges them to ensure we never get 0 results while keeping context.
+    """
+    cache_key = f"{base_query}_{str(patient_data)}"
+    
+    # CACHE CHECK
+    if cache_key in PUBMED_MEMORY_CACHE:
+        print(f"\n[CACHE HIT] Loaded papers instantly from RAM for: {base_query}")
+        return PUBMED_MEMORY_CACHE[cache_key]
+
+    specific_query = build_dynamic_pubmed_query(base_query, patient_data)
+    
+    # STEP 1: GENERAL FETCH
+    print(f"\n[HYBRID RETRIEVAL] Step 1: Fetching General -> {base_query}")
+    general_docs = retrieve_pubmed_structured(base_query) or []
+    
+    # THE RETRY SHIELD: If PubMed blocks Step 1, pause and try again!
+    if not general_docs:
+        print("[RATE LIMIT SHIELD] PubMed blocked Step 1. Pausing for 1 second and retrying...")
+        time.sleep(1.0)
+        general_docs = retrieve_pubmed_structured(base_query) or []
+    
+    # THROTTLE: Protect against NCBI limits before moving to Step 2
+    time.sleep(0.6) 
+    
+    # STEP 2: SPECIFIC FETCH
+    specific_docs = []
+    if specific_query != base_query:
+        print(f"[HYBRID RETRIEVAL] Step 2: Fetching Specific -> {specific_query}")
+        specific_docs = retrieve_pubmed_structured(specific_query) or []
+        
+    # COMBINE & REMOVE DUPLICATES
+    unique_docs = {}
+    
+    # Process SPECIFIC docs first so they are at the top of the context window!
+    for doc in specific_docs + general_docs:
+        pmid = doc.get("pmid")
+        if pmid and pmid not in unique_docs:
+            unique_docs[pmid] = doc
+            
+    # Limit to top 20 to prevent Gemini token limit crashes
+    final_docs = list(unique_docs.values())[:20]
+    print(f"[HYBRID RETRIEVAL] Success: Merged {len(final_docs)} unique papers.")
+    
+    # Save to RAM
+    PUBMED_MEMORY_CACHE[cache_key] = final_docs
+    
+    return final_docs
+
+def build_dynamic_pubmed_query(base_text: str, patient_data: dict) -> str:
+    """Dynamically builds a PubMed query from any future patient data fields."""
+    if not patient_data:
+        return base_text
+        
+    clinical_keywords = []
+    # Ignore fields that shouldn't be literal search terms in PubMed
+    ignore_keys = ['age', 'gender', 'name', 'id'] 
+    
+    for key, value in patient_data.items():
+        if key.lower() not in ignore_keys and isinstance(value, str) and value.strip():
+            # If a field has multiple items (e.g., "Hypertension, Smoker"), split them
+            items = [item.strip() for item in value.split(',') if item.strip()]
+            clinical_keywords.extend(items)
+            
+    if not clinical_keywords:
+        return base_text
+        
+    # Build the block: ("Hypertension" OR "Smoker" OR "Penicillin Allergy")
+    context_block = " OR ".join([f'"{kw}"' for kw in clinical_keywords])
+    
+    # Final query: (Metformin) AND ("Hypertension" OR "Smoker")
+    return f'({base_text}) AND ({context_block})'
 
 def retrieve_pubmed_structured(query: str, max_results: int = 15, timeout_sec: int = 10):
     """Fetches full abstracts from PubMed using the efetch XML API."""
     
     # It is highly recommended to use your real email so NCBI doesn't block your IP
-    YOUR_EMAIL = "rahulraya665@gmail.com" # <-- REPLACE THIS
+    YOUR_EMAIL = "rahulraya662005@gmail.com"
     TOOL_NAME = "MedTrustGraph_CDSS"
 
     base_url = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi"

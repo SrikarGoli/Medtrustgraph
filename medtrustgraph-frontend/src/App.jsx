@@ -6,7 +6,7 @@ export default function App() {
   const [queryText, setQueryText] = useState('');
   
   const [patientData, setPatientData] = useState({
-    age: '', gender: '', diseases: '', hereditary: '', habits: ''
+    age: '', gender: '', diseases: '', hereditary: '', habits: '', dynamicFields: {}
   });
 
   const [loading, setLoading] = useState(false);
@@ -22,6 +22,49 @@ export default function App() {
   const [dietLoading, setDietLoading] = useState(false);
 
   const pollingInterval = useRef(null);
+
+  const [isReadingPdf, setIsReadingPdf] = useState(false);
+
+  const handleFileUpload = async (event) => {
+    const file = event.target.files[0];
+    if (!file) return;
+
+    setIsReadingPdf(true);
+    const formData = new FormData();
+    formData.append("file", file); // "file" must match the parameter name in Python
+
+    try {
+        const response = await fetch("http://localhost:8000/parse-report", {
+            method: "POST",
+            body: formData,
+        });
+
+        const data = await response.json();
+
+        if (data.error) {
+            alert("Error reading PDF: " + data.error);
+        } else {
+            // SUCCESS! Update your specific patientData state object
+            setPatientData(prev => ({
+              ...prev,
+              age: data.age || prev.age,
+              gender: data.gender || prev.gender,
+              diseases: data.diseases || prev.diseases,
+              habits: data.habits || prev.habits,
+              hereditary: data.hereditary || prev.hereditary,
+              dynamicFields: data.dynamic_fields || prev.dynamicFields // <--- ADD THIS LINE
+            }));
+            
+            console.log("AI Extracted Data:", data);
+        }
+    } catch (error) {
+        console.error("Upload failed:", error);
+        alert("Failed to connect to the AI parser.");
+    } finally {
+        setIsReadingPdf(false);
+        event.target.value = null; // Reset the input 
+    }
+  };
 
   const handleAddRadarItem = (e) => {
     if (e.key === 'Enter' && radarInput.trim() !== '') {
@@ -134,14 +177,27 @@ export default function App() {
     if (!queryText.trim()) return;
     setLoading(true); setQueryData(null); setGraphData({ nodes: [], links: [] });
 
+    // ✨ THE HACK: Bundle the dynamic fields into a readable string
+    const extraInfo = Object.entries(patientData.dynamicFields || {})
+        .map(([key, value]) => `${key}: ${value}`)
+        .join(', ');
+        
+    // Append it to diseases so the backend doesn't crash, but the AI still reads it!
+    const combinedDiseases = extraInfo 
+        ? `${patientData.diseases}. Additional Patient Context: ${extraInfo}` 
+        : patientData.diseases;
+
     try {
       const res = await fetch('http://localhost:8080/api/queries', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ 
             questionText: queryText,
-            age: patientData.age, gender: patientData.gender,
-            diseases: patientData.diseases, hereditary: patientData.hereditary, habits: patientData.habits
+            age: patientData.age, 
+            gender: patientData.gender,
+            diseases: combinedDiseases, // <--- Send the injected string here!
+            hereditary: patientData.hereditary, 
+            habits: patientData.habits
         })
       });
       const data = await res.json();
@@ -281,7 +337,45 @@ export default function App() {
             <div className="flex flex-col lg:col-span-2"><label className="text-slate-400 text-xs mb-1 ml-1 font-medium">Lifestyle / Habits</label><input type="text" placeholder="e.g., Heavy smoker" className="p-2.5 bg-slate-900/60 border border-slate-600 rounded-lg text-sm text-slate-200" value={patientData.habits} onChange={e => setPatientData({...patientData, habits: e.target.value})} /></div>
             <div className="flex flex-col lg:col-span-2"><label className="text-slate-400 text-xs mb-1 ml-1 font-medium">Chronic Diseases</label><input type="text" placeholder="e.g., Hypertension" className="p-2.5 bg-slate-900/60 border border-slate-600 rounded-lg text-sm text-slate-200" value={patientData.diseases} onChange={e => setPatientData({...patientData, diseases: e.target.value})} /></div>
             <div className="flex flex-col lg:col-span-2"><label className="text-slate-400 text-xs mb-1 ml-1 font-medium">Hereditary History</label><input type="text" placeholder="e.g., Family history of early MI" className="p-2.5 bg-slate-900/60 border border-slate-600 rounded-lg text-sm text-slate-200" value={patientData.hereditary} onChange={e => setPatientData({...patientData, hereditary: e.target.value})} /></div>
+            {/* DYNAMIC FIELDS RENDERED BY AI */}
+            {patientData.dynamicFields && Object.entries(patientData.dynamicFields).map(([key, value]) => (
+              <div key={key} className="flex flex-col lg:col-span-2">
+                <label className="text-purple-400 text-xs mb-1 ml-1 font-bold flex items-center gap-1">✨ AI Extracted: {key}</label>
+                <input 
+                  type="text" 
+                  className="p-2.5 bg-slate-900/60 border border-purple-500/50 rounded-lg text-sm text-slate-200 shadow-[0_0_10px_rgba(168,85,247,0.2)]" 
+                  value={value} 
+                  onChange={e => setPatientData({
+                    ...patientData, 
+                    dynamicFields: { ...patientData.dynamicFields, [key]: e.target.value }
+                  })} 
+                />
+              </div>
+            ))}
           </div>
+        </div>
+        <div className="pdf-upload-container" style={{ marginBottom: '20px' }}>
+            <input
+                type="file"
+                id="report-upload"
+                accept="application/pdf"
+                style={{ display: 'none' }}
+                onChange={handleFileUpload}
+            />
+            <label 
+                htmlFor="report-upload" 
+                style={{ 
+                    cursor: isReadingPdf ? 'not-allowed' : 'pointer', 
+                    padding: '10px 15px', 
+                    backgroundColor: isReadingPdf ? '#ccc' : '#4F46E5', 
+                    color: 'white', 
+                    borderRadius: '6px',
+                    fontWeight: 'bold',
+                    display: 'inline-block'
+                }}
+            >
+                {isReadingPdf ? "🤖 AI is reading report..." : "📄 Auto-Fill from PDF Report"}
+            </label>
         </div>
       </header>
 
