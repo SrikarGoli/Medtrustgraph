@@ -10,4 +10,5 @@ public class QueryRequest {
     private String diseases;
     private String hereditary;
     private String habits;
+    private String additionalContext; 
 }

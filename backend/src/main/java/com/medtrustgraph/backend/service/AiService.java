@@ -15,19 +15,20 @@ public class AiService {
 
     private final WebClient.Builder webClientBuilder;
 
-    // Helper method to stitch the form fields into a readable paragraph for Gemini
-    private String buildPatientContextString(String age, String gender, String diseases, String hereditary, String habits) {
+    // ✨ ADDED additionalContext HERE to stitch it into the Gemini paragraph
+    private String buildPatientContextString(String age, String gender, String diseases, String hereditary, String habits, String additionalContext) {
         StringBuilder contextBuilder = new StringBuilder();
         if (age != null && !age.trim().isEmpty()) contextBuilder.append("Age: ").append(age).append(". ");
         if (gender != null && !gender.trim().isEmpty()) contextBuilder.append("Gender: ").append(gender).append(". ");
         if (diseases != null && !diseases.trim().isEmpty()) contextBuilder.append("Chronic Diseases: ").append(diseases).append(". ");
         if (hereditary != null && !hereditary.trim().isEmpty()) contextBuilder.append("Hereditary: ").append(hereditary).append(". ");
         if (habits != null && !habits.trim().isEmpty()) contextBuilder.append("Habits: ").append(habits).append(". ");
+        if (additionalContext != null && !additionalContext.trim().isEmpty()) contextBuilder.append("Additional Context: ").append(additionalContext).append(". ");
         return contextBuilder.toString().trim();
     }
 
-    // NEW HELPER: Safely builds the JSON request body with ALL discrete fields for Python Phase 1
-    private Map<String, Object> buildRequestBody(String text, String finalPatientContext, String age, String gender, String diseases, String hereditary, String habits) {
+    // ✨ ADDED additionalContext HERE to pass it to Python
+    private Map<String, Object> buildRequestBody(String text, String finalPatientContext, String age, String gender, String diseases, String hereditary, String habits, String additionalContext) {
         Map<String, Object> requestBody = new HashMap<>();
         requestBody.put("text", text);
         requestBody.put("patient_context", finalPatientContext);
@@ -38,16 +39,17 @@ public class AiService {
         requestBody.put("diseases", diseases != null ? diseases : "");
         requestBody.put("hereditary", hereditary != null ? hereditary : "");
         requestBody.put("habits", habits != null ? habits : "");
+        requestBody.put("additional_context", additionalContext != null ? additionalContext : "");
         
         return requestBody;
     }
 
-    public AiResponse extractClaims(String text, String age, String gender, String diseases, String hereditary, String habits) {
-        String finalPatientContext = buildPatientContextString(age, gender, diseases, hereditary, habits);
+    public AiResponse extractClaims(String text, String age, String gender, String diseases, String hereditary, String habits, String additionalContext) {
+        String finalPatientContext = buildPatientContextString(age, gender, diseases, hereditary, habits, additionalContext);
         WebClient webClient = webClientBuilder.baseUrl("http://localhost:8000").build();
         
         // USING THE NEW HELPER
-        Map<String, Object> requestBody = buildRequestBody(text, finalPatientContext, age, gender, diseases, hereditary, habits);
+        Map<String, Object> requestBody = buildRequestBody(text, finalPatientContext, age, gender, diseases, hereditary, habits, additionalContext);
 
         return webClient.post()
             .uri("/extract-claims")
@@ -58,12 +60,12 @@ public class AiService {
             .block();
     }
 
-    public AiResponse analyzeInteractions(String text, String age, String gender, String diseases, String hereditary, String habits) {
-        String finalPatientContext = buildPatientContextString(age, gender, diseases, hereditary, habits);
+    public AiResponse analyzeInteractions(String text, String age, String gender, String diseases, String hereditary, String habits, String additionalContext) {
+        String finalPatientContext = buildPatientContextString(age, gender, diseases, hereditary, habits, additionalContext);
         WebClient webClient = webClientBuilder.baseUrl("http://localhost:8000").build();
         
         // USING THE NEW HELPER
-        Map<String, Object> requestBody = buildRequestBody(text, finalPatientContext, age, gender, diseases, hereditary, habits);
+        Map<String, Object> requestBody = buildRequestBody(text, finalPatientContext, age, gender, diseases, hereditary, habits, additionalContext);
 
         return webClient.post()
             .uri("/analyze-interactions") 
@@ -75,12 +77,12 @@ public class AiService {
     }
     
     // UPDATE: Now Baseline RAG also gets the patient context!
-    public String getBaselineAnswer(String text, String age, String gender, String diseases, String hereditary, String habits) {
-        String finalPatientContext = buildPatientContextString(age, gender, diseases, hereditary, habits);
+    public String getBaselineAnswer(String text, String age, String gender, String diseases, String hereditary, String habits, String additionalContext) {
+        String finalPatientContext = buildPatientContextString(age, gender, diseases, hereditary, habits, additionalContext);
         WebClient webClient = webClientBuilder.baseUrl("http://localhost:8000").build();
         
         // USING THE NEW HELPER
-        Map<String, Object> requestBody = buildRequestBody(text, finalPatientContext, age, gender, diseases, hereditary, habits);
+        Map<String, Object> requestBody = buildRequestBody(text, finalPatientContext, age, gender, diseases, hereditary, habits, additionalContext);
 
         try {
             Map response = webClient.post()

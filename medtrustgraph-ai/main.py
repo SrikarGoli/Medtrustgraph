@@ -193,7 +193,16 @@ You MUST actively extract claims that highlight specific risks, adverse effects,
 
     graph, has_conflict = propagate_trust(graph)
 
-    node_trust = [{"id": n, "text": graph.nodes[n]["text"], "trust": float(graph.nodes[n]["trust"])} for n in graph.nodes]
+    node_trust = []
+    for n in graph.nodes:
+        # Convert the internal index to the actual PubMed IDs
+        pmids = [str(pubmed_docs[idx].get("pmid")) for idx in graph.nodes[n]["sources"] if idx < len(pubmed_docs) and pubmed_docs[idx].get("pmid")]
+        node_trust.append({
+            "id": n, 
+            "text": graph.nodes[n]["text"], 
+            "trust": float(graph.nodes[n]["trust"]),
+            "sources": pmids 
+        })
     edges = [{"source": u, "target": v, "weight": data["weight"]} for u, v, data in graph.edges(data=True)]
 
     # Stability & Output
@@ -494,8 +503,11 @@ async def parse_report(file: UploadFile = File(...)):
             "diseases": "Comma separated list of chronic diseases. No temporary infections.",
             "habits": "Comma separated list of habits (e.g., Smoker, Alcohol, Sedentary)",
             "hereditary": "Comma separated list of family history or hereditary conditions",
-            "dynamic_fields": {{"Blood Group": "value", "Allergies": "value", "Vitals": "value if found"}}
+            "dynamic_fields": {{}}
         }}
+
+        CRITICAL RULE FOR "dynamic_fields":
+        Do NOT hardcode categories. ONLY create new key-value pairs inside "dynamic_fields" for extra medical data you ACTUALLY find in the text that doesn't fit the main categories (e.g., "BMI": "24.5", "Surgical History": "Appendectomy", "Blood Pressure": "120/80"). If there is no extra info, leave it as an empty object {{}}.
         """
 
         # FORCE strict JSON output from Gemini

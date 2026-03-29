@@ -41,8 +41,8 @@ public class QueryService {
 
         Query savedQuery = queryRepository.save(query);
         
-        // Kick off the background job
-        processAiDataAsync(savedQuery.getId(), request.getQuestionText(),request.getAge(),request.getGender(),request.getDiseases(),request.getHereditary(),request.getHabits());
+        // Kick off the background job with the new context!
+        processAiDataAsync(savedQuery.getId(), request.getQuestionText(),request.getAge(),request.getGender(),request.getDiseases(),request.getHereditary(),request.getHabits(), request.getAdditionalContext());
         
         return savedQuery; // Returns in milliseconds!
     }
@@ -50,22 +50,22 @@ public class QueryService {
     // 2. Asynchronous method: Runs on a separate background thread
     // 2. Asynchronous method: Runs on a separate background thread
     @Async
-    public void processAiDataAsync(Long queryId, String questionText, String age, String gender, String diseases, String hereditary, String habits) {
+    public void processAiDataAsync(Long queryId, String questionText, String age, String gender, String diseases, String hereditary, String habits, String additionalContext) {
         try {
             // 1. Fetch the Standard Baseline Answer (Fast)
             // Note: If your getBaselineAnswer method in AiService was also updated to take the new fields, 
             // you should pass them here. Otherwise, leave it as is if it only takes questionText.
             // 1. Fetch the Standard Baseline Answer (Fast)
-            String baselineAnswer = aiService.getBaselineAnswer(questionText, age, gender, diseases, hereditary, habits);
+            String baselineAnswer = aiService.getBaselineAnswer(questionText, age, gender, diseases, hereditary, habits, additionalContext);
             
             // 2. ROUTING LOGIC: Choose the right AI process!
             AiResponse aiResponse;
             if (questionText.startsWith("RADAR_QUERY:")) {
                 // Call the new Interaction Graph Endpoint
-                aiResponse = aiService.analyzeInteractions(questionText, age, gender, diseases, hereditary, habits);
+                aiResponse = aiService.analyzeInteractions(questionText, age, gender, diseases, hereditary, habits, additionalContext);
             } else {
                 // Call the standard Clinical Graph Endpoint
-                aiResponse = aiService.extractClaims(questionText, age, gender, diseases, hereditary, habits);
+                aiResponse = aiService.extractClaims(questionText, age, gender, diseases, hereditary, habits, additionalContext);
             }
 
             // Fetch the pending query from the database...

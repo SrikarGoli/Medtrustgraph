@@ -9,9 +9,14 @@ export default function App() {
     age: '', gender: '', diseases: '', hereditary: '', habits: '', dynamicFields: {}
   });
 
+  // ✨ ADD THESE TWO LINES FOR MANUAL FIELDS
+  const [newFieldKey, setNewFieldKey] = useState('');
+  const [newFieldValue, setNewFieldValue] = useState('');
+
   const [loading, setLoading] = useState(false);
   const [queryData, setQueryData] = useState(null);
   const [graphData, setGraphData] = useState({ nodes: [], links: [] });
+  const [selectedNode, setSelectedNode] = useState(null);
 
   const [activeTab, setActiveTab] = useState('clinical'); 
   const [radarItems, setRadarItems] = useState([]); 
@@ -24,6 +29,24 @@ export default function App() {
   const pollingInterval = useRef(null);
 
   const [isReadingPdf, setIsReadingPdf] = useState(false);
+
+
+  // ✨ ADD THIS FUNCTION
+  const handleAddCustomField = () => {
+    if (!newFieldKey.trim()) return;
+    
+    setPatientData(prev => ({
+      ...prev,
+      dynamicFields: {
+        ...(prev.dynamicFields || {}),
+        [newFieldKey.trim()]: newFieldValue
+      }
+    }));
+    
+    // Clear the inputs after adding
+    setNewFieldKey('');
+    setNewFieldValue('');
+  };
 
   const handleFileUpload = async (event) => {
     const file = event.target.files[0];
@@ -153,6 +176,12 @@ export default function App() {
   // NEW: Fetch Diet Plan directly from Python backend
   const fetchDietPlan = async (drugs) => {
     setDietLoading(true);
+
+    // ✨ Package the dynamic fields for the Diet plan
+    const extraInfo = Object.entries(patientData.dynamicFields || {})
+        .map(([key, value]) => `${key}: ${value}`)
+        .join(', ');
+
     try {
       // Pointing directly to your Python FastAPI port 8000
       const res = await fetch('http://localhost:8000/generate-diet', {
@@ -160,8 +189,12 @@ export default function App() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ 
             drugs: drugs,
-            age: patientData.age, gender: patientData.gender,
-            diseases: patientData.diseases, hereditary: patientData.hereditary, habits: patientData.habits
+            age: patientData.age, 
+            gender: patientData.gender,
+            diseases: patientData.diseases, 
+            hereditary: patientData.hereditary, 
+            habits: patientData.habits,
+            additional_context: extraInfo // ✨ Sent directly to Python FastAPI!
         })
       });
       const data = await res.json();
@@ -177,15 +210,10 @@ export default function App() {
     if (!queryText.trim()) return;
     setLoading(true); setQueryData(null); setGraphData({ nodes: [], links: [] });
 
-    // ✨ THE HACK: Bundle the dynamic fields into a readable string
+    // ✨ Package the dynamic fields
     const extraInfo = Object.entries(patientData.dynamicFields || {})
         .map(([key, value]) => `${key}: ${value}`)
         .join(', ');
-        
-    // Append it to diseases so the backend doesn't crash, but the AI still reads it!
-    const combinedDiseases = extraInfo 
-        ? `${patientData.diseases}. Additional Patient Context: ${extraInfo}` 
-        : patientData.diseases;
 
     try {
       const res = await fetch('http://localhost:8080/api/queries', {
@@ -195,9 +223,10 @@ export default function App() {
             questionText: queryText,
             age: patientData.age, 
             gender: patientData.gender,
-            diseases: combinedDiseases, // <--- Send the injected string here!
+            diseases: patientData.diseases, // <--- No more hack! Pure diseases data.
             hereditary: patientData.hereditary, 
-            habits: patientData.habits
+            habits: patientData.habits,
+            additionalContext: extraInfo // ✨ Sent cleanly to Java!
         })
       });
       const data = await res.json();
@@ -210,13 +239,17 @@ export default function App() {
   const handleRadarSearch = async () => {
     if (radarItems.length < 2) return; 
     setLoading(true); setQueryData(null); setGraphData({ nodes: [], links: [] });
-    setDietPlan(null); // Clear old diet plan
+    setDietPlan(null); 
 
-    // Trigger the FDA Diet fetch in parallel with the Java backend search!
     fetchDietPlan(radarItems);
 
     const drugList = radarItems.join(", ");
     const secretQueryText = `RADAR_QUERY: ${drugList}`;
+
+    // ✨ Package the dynamic fields here too!
+    const extraInfo = Object.entries(patientData.dynamicFields || {})
+        .map(([key, value]) => `${key}: ${value}`)
+        .join(', ');
 
     try {
       const res = await fetch('http://localhost:8080/api/queries', {
@@ -224,8 +257,12 @@ export default function App() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ 
             questionText: secretQueryText,
-            age: patientData.age, gender: patientData.gender,
-            diseases: patientData.diseases, hereditary: patientData.hereditary, habits: patientData.habits
+            age: patientData.age, 
+            gender: patientData.gender,
+            diseases: patientData.diseases, 
+            hereditary: patientData.hereditary, 
+            habits: patientData.habits,
+            additionalContext: extraInfo // ✨ SEND TO JAVA HERE
         })
       });
 
@@ -267,8 +304,12 @@ export default function App() {
       const data = await res.json();
       
       const nodes = data.nodes.map(c => ({
-        id: c.aiNodeId, name: c.claimText,
-        color: c.isPruned ? '#ef4444' : '#22c55e', trust: c.finalTrust
+        id: c.aiNodeId, 
+        name: c.claimText,
+        color: c.isPruned ? '#ef4444' : '#22c55e', 
+        trust: c.finalTrust,
+        // ✨ ADD THIS LINE to pull the PubMed IDs
+        sources: c.sourceIndices || c.sources || "" 
       }));
 
       const links = data.edges.map(e => ({
@@ -337,10 +378,10 @@ export default function App() {
             <div className="flex flex-col lg:col-span-2"><label className="text-slate-400 text-xs mb-1 ml-1 font-medium">Lifestyle / Habits</label><input type="text" placeholder="e.g., Heavy smoker" className="p-2.5 bg-slate-900/60 border border-slate-600 rounded-lg text-sm text-slate-200" value={patientData.habits} onChange={e => setPatientData({...patientData, habits: e.target.value})} /></div>
             <div className="flex flex-col lg:col-span-2"><label className="text-slate-400 text-xs mb-1 ml-1 font-medium">Chronic Diseases</label><input type="text" placeholder="e.g., Hypertension" className="p-2.5 bg-slate-900/60 border border-slate-600 rounded-lg text-sm text-slate-200" value={patientData.diseases} onChange={e => setPatientData({...patientData, diseases: e.target.value})} /></div>
             <div className="flex flex-col lg:col-span-2"><label className="text-slate-400 text-xs mb-1 ml-1 font-medium">Hereditary History</label><input type="text" placeholder="e.g., Family history of early MI" className="p-2.5 bg-slate-900/60 border border-slate-600 rounded-lg text-sm text-slate-200" value={patientData.hereditary} onChange={e => setPatientData({...patientData, hereditary: e.target.value})} /></div>
-            {/* DYNAMIC FIELDS RENDERED BY AI */}
+            {/* DYNAMIC FIELDS RENDERED BY AI OR MANUAL */}
             {patientData.dynamicFields && Object.entries(patientData.dynamicFields).map(([key, value]) => (
-              <div key={key} className="flex flex-col lg:col-span-2">
-                <label className="text-purple-400 text-xs mb-1 ml-1 font-bold flex items-center gap-1">✨ AI Extracted: {key}</label>
+              <div key={key} className="flex flex-col lg:col-span-2 relative group">
+                <label className="text-purple-400 text-xs mb-1 ml-1 font-bold flex items-center gap-1">✨ {key}</label>
                 <input 
                   type="text" 
                   className="p-2.5 bg-slate-900/60 border border-purple-500/50 rounded-lg text-sm text-slate-200 shadow-[0_0_10px_rgba(168,85,247,0.2)]" 
@@ -352,6 +393,35 @@ export default function App() {
                 />
               </div>
             ))}
+
+            {/* ✨ ADD CUSTOM FIELD UI */}
+            <div className="flex flex-col lg:col-span-4 mt-2 p-3 bg-slate-800/40 rounded-xl border border-slate-600 border-dashed transition-all hover:border-slate-400">
+              <label className="text-slate-400 text-xs mb-2 ml-1 font-bold flex items-center gap-2">➕ Add Custom Medical Field</label>
+              <div className="flex flex-col sm:flex-row gap-3">
+                <input
+                  type="text"
+                  placeholder="Field Name (e.g., Blood Type)"
+                  className="p-2.5 flex-1 bg-slate-900/80 border border-slate-600 rounded-lg text-sm text-slate-200 focus:border-blue-500 focus:outline-none"
+                  value={newFieldKey}
+                  onChange={e => setNewFieldKey(e.target.value)}
+                />
+                <input
+                  type="text"
+                  placeholder="Value (e.g., O+)"
+                  className="p-2.5 flex-1 bg-slate-900/80 border border-slate-600 rounded-lg text-sm text-slate-200 focus:border-blue-500 focus:outline-none"
+                  value={newFieldValue}
+                  onChange={e => setNewFieldValue(e.target.value)}
+                  onKeyDown={e => e.key === 'Enter' && handleAddCustomField()}
+                />
+                <button
+                  onClick={handleAddCustomField}
+                  disabled={!newFieldKey.trim()}
+                  className="bg-slate-700 hover:bg-slate-600 disabled:opacity-50 text-white px-6 py-2.5 rounded-lg font-bold transition-all text-sm"
+                >
+                  Add Field
+                </button>
+              </div>
+            </div>
           </div>
         </div>
         <div className="pdf-upload-container" style={{ marginBottom: '20px' }}>
@@ -483,10 +553,11 @@ export default function App() {
               <span className="flex items-center gap-1"><span className="w-4 h-0.5 bg-red-500"></span> Contradiction</span>
             </div>
           </div>
-          <div className="flex-grow bg-slate-900 relative">
+          <div className="flex-grow bg-slate-900 relative overflow-hidden">
              {graphData.nodes.length > 0 ? (
                 <ForceGraph2D
                   graphData={graphData}
+                  onNodeClick={(node) => setSelectedNode(node)}
                   linkColor={link => link.weight === -1 ? '#ef4444' : '#22c55e'}
                   linkWidth={2}
                   linkDirectionalParticles={2}
@@ -550,6 +621,64 @@ export default function App() {
                   {loading ? 'Generating 2D WebGL Graph...' : 'Enter a query to visualize evidence nodes.'}
                 </div>
              )}
+
+              {/* ✨ INTERACTIVE SIDEBAR UI ✨ */}
+              {selectedNode && (
+                <div className="absolute top-0 right-0 w-80 md:w-96 h-full bg-slate-800/95 backdrop-blur-md border-l border-slate-600 shadow-2xl p-5 flex flex-col z-10 transition-all duration-300">
+                  <div className="flex justify-between items-start mb-4 border-b border-slate-600 pb-3">
+                    <h3 className="text-lg font-bold text-white flex items-center gap-2">
+                      <Activity size={18} className="text-blue-400"/> Node Details
+                    </h3>
+                    <button onClick={() => setSelectedNode(null)} className="text-slate-400 hover:text-white bg-slate-700 hover:bg-slate-600 rounded-full p-1 transition-colors">
+                      <X size={18} />
+                    </button>
+                  </div>
+                  
+                  <div className="flex-grow overflow-y-auto pr-2">
+                    <div className="mb-4">
+                      <span className={`px-3 py-1 text-xs font-bold rounded-full ${selectedNode.color === '#22c55e' ? 'bg-green-500/20 text-green-400 border border-green-500/30' : 'bg-red-500/20 text-red-400 border border-red-500/30'}`}>
+                        {selectedNode.color === '#22c55e' ? '✓ Trusted Evidence' : '✗ Pruned (Conflict)'}
+                      </span>
+                    </div>
+                    
+                    <div className="mb-5">
+                      <label className="text-slate-400 text-xs font-bold uppercase tracking-wider mb-1 block">Extracted Claim</label>
+                      <p className="text-slate-200 text-sm leading-relaxed bg-slate-900/50 p-3 rounded-lg border border-slate-700/50">
+                        {selectedNode.name}
+                      </p>
+                    </div>
+
+                    <div className="mb-5">
+                      <label className="text-slate-400 text-xs font-bold uppercase tracking-wider mb-1 block">NLI Trust Score</label>
+                      <div className="flex items-center gap-3 bg-slate-900/50 p-3 rounded-lg border border-slate-700/50">
+                        <div className="w-full bg-slate-700 rounded-full h-2.5">
+                          <div className={`h-2.5 rounded-full ${selectedNode.color === '#22c55e' ? 'bg-green-500' : 'bg-red-500'}`} style={{ width: `${Math.max(0, Math.min(100, selectedNode.trust * 100))}%` }}></div>
+                        </div>
+                        <span className="text-white font-mono text-sm">{selectedNode.trust ? selectedNode.trust.toFixed(2) : '0.00'}</span>
+                      </div>
+                    </div>
+
+                    <div>
+                      <label className="text-slate-400 text-xs font-bold uppercase tracking-wider mb-2 block">PubMed Sources</label>
+                      {selectedNode.sources ? (
+                        <div className="flex flex-wrap gap-2">
+                          {selectedNode.sources.split(',').map((pmid, idx) => {
+                            const cleanPmid = pmid.trim();
+                            if (!cleanPmid) return null;
+                            return (
+                              <a key={idx} href={`https://pubmed.ncbi.nlm.nih.gov/${cleanPmid}/`} target="_blank" rel="noreferrer" className="flex items-center gap-1 bg-blue-600/20 text-blue-400 border border-blue-500/30 hover:bg-blue-600 hover:text-white px-3 py-2 rounded-lg text-sm font-bold transition-all shadow-sm">
+                                <Search size={14} /> PMID: {cleanPmid}
+                              </a>
+                            );
+                          })}
+                        </div>
+                      ) : (
+                        <p className="text-slate-500 text-sm italic p-3 bg-slate-900/50 rounded-lg">No specific PMIDs linked to this node.</p>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              )}
           </div>
         </div>
       </main>
