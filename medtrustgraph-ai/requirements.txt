@@ -1,0 +1,13 @@
+google-genai
+python-dotenv
+fastapi
+uvicorn
+torch
+sentence-transformers
+sklearn
+transformers
+networkx
+numpy
+PyPDF2
+pydantic
+requests

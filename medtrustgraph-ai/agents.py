@@ -1,7 +1,11 @@
 # agents.py
 import os
+from dotenv import load_dotenv
 from google import genai
 from prompts import QUERY_TRANSLATOR_PROMPT
+
+# Load environment variables from .env file
+load_dotenv()
 
 # Load API Key from environment variable
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
