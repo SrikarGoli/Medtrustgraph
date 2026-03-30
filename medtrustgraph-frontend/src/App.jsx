@@ -27,9 +27,16 @@ export default function App() {
   const [dietLoading, setDietLoading] = useState(false);
 
   const pollingInterval = useRef(null);
+  const resultsRef = useRef(null);
 
   const [isReadingPdf, setIsReadingPdf] = useState(false);
 
+
+  const scrollToResults = () => {
+    setTimeout(() => {
+      resultsRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }, 150);
+  };
 
   // ✨ ADD THIS FUNCTION
   const handleAddCustomField = () => {
@@ -210,6 +217,8 @@ export default function App() {
     if (!queryText.trim()) return;
     setLoading(true); setQueryData(null); setGraphData({ nodes: [], links: [] });
 
+    scrollToResults();
+
     // ✨ Package the dynamic fields
     const extraInfo = Object.entries(patientData.dynamicFields || {})
         .map(([key, value]) => `${key}: ${value}`)
@@ -240,6 +249,8 @@ export default function App() {
     if (radarItems.length < 2) return; 
     setLoading(true); setQueryData(null); setGraphData({ nodes: [], links: [] });
     setDietPlan(null); 
+
+    scrollToResults();
 
     fetchDietPlan(radarItems);
 
@@ -324,7 +335,7 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-gray-50 flex flex-col font-sans">
-      <header className="bg-slate-900 text-white p-8 text-center shadow-lg">
+      <header className="bg-slate-900 text-white p-8 text-center shadow-lg min-h-screen flex flex-col justify-center items-center w-full relative">
         <h1 className="text-4xl font-extrabold tracking-tight">MedTrustGraph</h1>
         <p className="text-blue-300 mt-2 text-lg">Neuro-Symbolic AI for Medical Evidence Resolution</p>
         
@@ -336,7 +347,7 @@ export default function App() {
         </div>
 
         {activeTab === 'clinical' ? (
-          <div className="flex flex-col md:flex-row gap-4 max-w-4xl mx-auto">
+          <div className="flex flex-col md:flex-row gap-4 max-w-4xl mx-auto w-full">
             <div className="flex-grow bg-slate-800/50 p-2 rounded-xl border border-slate-700 flex items-center shadow-inner relative transition-all focus-within:border-blue-500 focus-within:ring-1 focus-within:ring-blue-500">
               <Search className="text-slate-400 ml-3 mr-2" size={24} />
               <input type="text" value={queryText} onChange={(e) => setQueryText(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && handleSearch()} placeholder="Ask a medical question (e.g., Is Metformin safe for...)" className="w-full bg-transparent text-slate-100 placeholder-slate-500 p-3 focus:outline-none text-lg" />
@@ -346,7 +357,7 @@ export default function App() {
             </button>
           </div>
         ) : (
-          <div className="max-w-4xl mx-auto bg-slate-800/50 p-6 rounded-xl border border-purple-500/50 shadow-lg">
+          <div className="max-w-4xl mx-auto w-full bg-slate-800/50 p-6 rounded-xl border border-purple-500/50 shadow-lg">
             <h2 className="text-purple-300 font-bold mb-2 flex items-center gap-2"><Activity size={20} /> Polypharmacy & Dietary Radar</h2>
             <p className="text-slate-400 text-sm mb-4">Type a drug, supplement, or food and press Enter to add it to the interaction matrix.</p>
             
@@ -449,7 +460,7 @@ export default function App() {
         </div>
       </header>
 
-      <main className="flex-grow p-8 flex flex-col gap-8 max-w-[1600px] mx-auto w-full items-start">
+      <main ref={resultsRef} className="flex-grow p-8 flex flex-col gap-8 max-w-[1600px] mx-auto w-full items-start min-h-screen pt-16">
         
         <div className="w-full flex flex-col lg:flex-row gap-6">
           <div className="w-full lg:w-1/2 bg-white p-6 rounded-xl shadow-md border-t-4 border-slate-400">

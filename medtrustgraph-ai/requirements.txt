@@ -4,7 +4,7 @@ fastapi
 uvicorn
 torch
 sentence-transformers
-sklearn
+scikit-learn
 transformers
 networkx
 numpy
