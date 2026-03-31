@@ -87,7 +87,7 @@ def retrieve_pubmed_structured(query: str, max_results: int = 15, timeout_sec: i
     """Fetches full abstracts from PubMed using the efetch XML API."""
     
     # It is highly recommended to use your real email so NCBI doesn't block your IP
-    YOUR_EMAIL = "rahulraya662005@gmail.com"
+    YOUR_EMAIL = "your email"
     TOOL_NAME = "MedTrustGraph_CDSS"
 
     base_url = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi"
