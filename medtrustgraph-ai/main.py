@@ -20,8 +20,8 @@ from transformers import AutoTokenizer, AutoModelForSequenceClassification
 import PyPDF2 
 
 # ==== IMPORT MODULAR ARCHITECTURE ====
-from prompts import CLAIM_EXTRACTION_PROMPT, BASELINE_RAG_PROMPT
-from pubmed_client import fetch_combined_pubmed_evidence
+from prompts import CLAIM_EXTRACTION_PROMPT, EXTRACT_CLAIMS_FINAL_PROMPT, BASELINE_RAG_PROMPT
+from pubmed_client import fetch_pubmed_evidence
 from graph_utils import initialize_trust, propagate_trust
 from agents import client 
 
@@ -44,6 +44,9 @@ app.add_middleware(
 embedding_model = SentenceTransformer("all-MiniLM-L6-v2")
 nli_tokenizer = AutoTokenizer.from_pretrained("typeform/distilbert-base-uncased-mnli")
 nli_model = AutoModelForSequenceClassification.from_pretrained("typeform/distilbert-base-uncased-mnli")
+
+# ✨ MASTER GRAPH CACHE to instantly load previously computed interactions
+MEDTRUST_GRAPH_CACHE = {} 
 
 # ✨ ARCHITECTURE UPDATE: Added additional_context to models
 class ClaimExtractionRequest(BaseModel):
@@ -111,7 +114,17 @@ def build_patient_string(request):
 def extract_claims(request: ClaimExtractionRequest):
     
     patient_dict = request.get_clinical_data()
-    pubmed_docs = fetch_combined_pubmed_evidence(request.text, patient_dict)
+    
+    # 1. PERFECT CACHE KEY: Ignore empty frontend fields and lowercase the query
+    clean_patient = {k: v for k, v in patient_dict.items() if str(v).strip()}
+    cache_key = f"{request.text.strip().lower()}_{json.dumps(clean_patient, sort_keys=True)}"
+
+    if cache_key in MEDTRUST_GRAPH_CACHE:
+        print(f"\n[⚡ ULTIMATE CACHE HIT] Loaded fully computed graph instantly for: '{request.text}'")
+        return MEDTRUST_GRAPH_CACHE[cache_key]
+
+    # is_medtrust=True enables Translation, Patient Constraints, and Fallback logic
+    pubmed_docs = fetch_pubmed_evidence(base_query=request.text, patient_data=patient_dict, is_medtrust=True)
 
     if not pubmed_docs:
         return {"nodes": [], "edges": [], "stable_nodes": [], "is_stable": False, "confidence_score": 0.0, "final_answer": f"No relevant PubMed evidence found for {request.text}."}
@@ -119,7 +132,7 @@ def extract_claims(request: ClaimExtractionRequest):
     retrieved_docs = [doc["abstract"] for doc in pubmed_docs]
     formatted_docs = "\n".join([f"\n[Document {i}]\n{doc}\n" for i, doc in enumerate(retrieved_docs)])
 
-    # ✨ ARCHITECTURE UPDATE: Feed the full profile (including dynamic fields) to Gemini
+    # Feed the full profile (including dynamic fields) to Gemini
     full_patient_profile = build_patient_string(request)
     patient_instruction = ""
     if full_patient_profile:
@@ -140,7 +153,11 @@ You MUST actively extract claims that highlight specific risks, adverse effects,
         contents=prompt,
         config=types.GenerateContentConfig(response_mime_type="application/json")
     )
-    raw_text = (response.text if hasattr(response, "text") else "").replace("```json", "").replace("```", "").strip()
+    
+    # Safely clean markdown to prevent crashes
+    raw_text = response.text if hasattr(response, "text") else ""
+    md_prefix = "`" * 3
+    raw_text = raw_text.replace(md_prefix + "json", "").replace(md_prefix, "").strip()
 
     try:
         parsed = json.loads(raw_text)
@@ -195,7 +212,6 @@ You MUST actively extract claims that highlight specific risks, adverse effects,
 
     node_trust = []
     for n in graph.nodes:
-        # Convert the internal index to the actual PubMed IDs
         pmids = [str(pubmed_docs[idx].get("pmid")) for idx in graph.nodes[n]["sources"] if idx < len(pubmed_docs) and pubmed_docs[idx].get("pmid")]
         node_trust.append({
             "id": n, 
@@ -224,21 +240,31 @@ You MUST actively extract claims that highlight specific risks, adverse effects,
         pmids = [pubmed_docs[idx].get("pmid") for idx in graph.nodes[n]["sources"] if idx < len(pubmed_docs) and pubmed_docs[idx].get("pmid")]
         trusted_context_lines.append(f"- [Claim ID: {n}] [PMIDs: {', '.join(pmids) if pmids else 'Unknown'}]: {graph.nodes[n]['text']}")
         
-    citation_rules = "\nCRITICAL INSTRUCTION: You MUST cite the source using the provided PMIDs. Format: [PMID: 12345678]."
-    patient_warning = f"\n\nCRITICAL PATIENT CONTEXT: Explicitly tailor conclusion for profile: '{full_patient_profile}'." if full_patient_profile else ""
+    conflict_instruction = (
+        "Conflict flag is TRUE. The verified claims contain disagreement. You MUST acknowledge uncertainty or debate, explain the competing directions of evidence, and avoid a falsely definitive conclusion."
+        if has_conflict
+        else "Conflict flag is FALSE. You should provide a coherent conclusion that best fits the verified claims, while still noting any important limitations if they appear in the claims."
+    )
+    patient_final_context = full_patient_profile if full_patient_profile else "No specific patient context provided."
 
-    formatting_rules = "\nFORMATTING: You MUST use clear formatting. Break your answer into short paragraphs. Use bullet points for listing evidence or risks. Use **bold text** for emphasis."
-
-    sys_inst = ("WARNING: HIGH CONFLICT detected. Acknowledge the debate." if has_conflict else "Provide a definitive conclusion based ONLY on verified claims.") + citation_rules + patient_warning + formatting_rules
-    
-    final_prompt = f"{sys_inst}\n\nUser Question: {request.text}\n\nVerified Claims:\n{chr(10).join(trusted_context_lines)}"
+    final_prompt = EXTRACT_CLAIMS_FINAL_PROMPT.format(
+        conflict_instruction=conflict_instruction,
+        patient_instruction=patient_final_context,
+        user_text=request.text,
+        verified_claims=chr(10).join(trusted_context_lines)
+    )
     
     answer_response = client.models.generate_content(model="gemini-flash-lite-latest", contents=final_prompt)
-    return {
+    
+    # Save the final computed result to the Master Cache
+    final_result = {
         "nodes": node_trust, "edges": edges, "stable_nodes": stable_nodes, 
         "is_stable": True, "has_conflict": has_conflict, "confidence_score": confidence_score, 
         "final_answer": answer_response.text
     }
+    
+    MEDTRUST_GRAPH_CACHE[cache_key] = final_result
+    return final_result
     
 # =============================
 # Baseline RAG Endpoint
@@ -247,9 +273,6 @@ You MUST actively extract claims that highlight specific risks, adverse effects,
 def baseline_rag(request: ClaimExtractionRequest):
     print(f"\n--- Running Baseline RAG ---")
     try:
-        patient_dict = request.get_clinical_data()
-        
-        # ROUTER: Is this a normal question or a Polypharmacy Radar?
         if request.text.startswith("RADAR_QUERY:"):
             drugs_str = request.text.replace("RADAR_QUERY:", "").strip()
             drugs_list = [d.strip() for d in drugs_str.split(",")]
@@ -258,21 +281,19 @@ def baseline_rag(request: ClaimExtractionRequest):
             pair_queries = [f'("{d1}" AND "{d2}")' for d1, d2 in pairs]
             base_pubmed_query = "(" + " OR ".join(pair_queries) + ') AND ("Drug Interactions"[MeSH] OR "Food-Drug Interactions"[MeSH] OR "Adverse Effects")'
             
-            pubmed_docs = fetch_combined_pubmed_evidence(base_pubmed_query, patient_dict)
+            pubmed_docs = fetch_pubmed_evidence(base_query=base_pubmed_query, patient_data=None, is_medtrust=False)
             task_text = f"Evaluate the safety and interactions between these items: {drugs_str}."
         else:
-            pubmed_docs = fetch_combined_pubmed_evidence(request.text, patient_dict)
+            pubmed_docs = fetch_pubmed_evidence(base_query=request.text, patient_data=None, is_medtrust=False)
             task_text = request.text
 
         if not pubmed_docs: 
             return {"answer": "No relevant PubMed evidence found for this specific combination of medications and patient conditions."}
-            
-        formatted_docs = "\n".join([f"\n[PMID: {doc['pmid']}]\n{doc['abstract']}\n" for doc in pubmed_docs])
-        
-        full_patient_profile = build_patient_string(request)
-        patient_instruction = f"\nCRITICAL PATIENT CONTEXT: Consider this profile: '{full_patient_profile}'." if full_patient_profile else ""
 
-        formatting_rules = "\nFORMATTING: You MUST use clear formatting. Break your answer into short paragraphs and use bullet points. Use bold text for severe warnings."
+        formatted_docs = "\n".join([f"\n[Document {i}]\n{doc['abstract']}\n" for i, doc in enumerate(pubmed_docs)])
+        patient_instruction = ""
+
+        formatting_rules = "\nFORMATTING: Use short paragraphs and a brief bullet list at the end. Do NOT mention PMIDs, paper IDs, document IDs, graph reasoning, or patient-specific tailoring."
 
         prompt = BASELINE_RAG_PROMPT.format(user_text=task_text, patient_instruction=patient_instruction, formatted_docs=formatted_docs) + formatting_rules
         response = client.models.generate_content(model="gemini-flash-lite-latest", contents=prompt)
@@ -298,7 +319,7 @@ def analyze_interactions(request: ClaimExtractionRequest):
     base_pubmed_query = "(" + " OR ".join(pair_queries) + ') AND ("Drug Interactions"[MeSH] OR "Food-Drug Interactions"[MeSH] OR "Adverse Effects")'
     
     patient_dict = request.get_clinical_data()
-    pubmed_docs = fetch_combined_pubmed_evidence(base_pubmed_query, patient_dict)
+    pubmed_docs = fetch_pubmed_evidence(base_query=base_pubmed_query, patient_data=patient_dict, is_medtrust=True)
     
     if not pubmed_docs:
         return {"nodes": [], "edges": [], "is_stable": True, "has_conflict": False, "final_answer": "No documented interactions found in PubMed for this combination.", "confidence_score": 1.0, "stable_nodes": []}
@@ -323,8 +344,11 @@ def analyze_interactions(request: ClaimExtractionRequest):
     
     raw_text = ext_response.text.strip()
     
-    if raw_text.startswith("```json"): raw_text = raw_text[7:]
-    if raw_text.endswith("```"): raw_text = raw_text[:-3]
+    # Safely strip markdown without breaking the generator
+    md_prefix = "`" * 3
+    if raw_text.startswith(md_prefix + "json"): raw_text = raw_text[7:]
+    elif raw_text.startswith(md_prefix): raw_text = raw_text[3:]
+    if raw_text.endswith(md_prefix): raw_text = raw_text[:-3]
 
     try:
         parsed_data = json.loads(raw_text.strip())
@@ -459,8 +483,11 @@ def generate_diet(request: DietRequest):
         
         raw_text = response.text.strip()
         
-        if raw_text.startswith("```json"): raw_text = raw_text[7:]
-        if raw_text.endswith("```"): raw_text = raw_text[:-3]
+        # Safely strip markdown without breaking the generator
+        md_prefix = "`" * 3
+        if raw_text.startswith(md_prefix + "json"): raw_text = raw_text[7:]
+        elif raw_text.startswith(md_prefix): raw_text = raw_text[3:]
+        if raw_text.endswith(md_prefix): raw_text = raw_text[:-3]
         
         diet_plan = json.loads(raw_text.strip())
         return diet_plan
@@ -476,7 +503,6 @@ def generate_diet(request: DietRequest):
 async def parse_report(file: UploadFile = File(...)):
     print(f"\n--- Processing PDF Upload: {file.filename} ---")
     try:
-        # 1. Rip the digital text out of the PDF
         pdf_reader = PyPDF2.PdfReader(file.file)
         extracted_text = ""
         for page in pdf_reader.pages:
@@ -488,7 +514,6 @@ async def parse_report(file: UploadFile = File(...)):
             print("ERROR: No digital text found.")
             return {"error": "Could not extract text. Is it a scanned image?"}
 
-        # 2. Ask Gemini to extract the clinical profile into JSON
         prompt = f"""
         You are a Medical Data Extraction AI. Read the following clinical lab report or doctor's note and extract the patient's demographic and clinical profile.
         If a piece of information is not mentioned in the text, leave the string completely empty ("").
@@ -510,14 +535,12 @@ async def parse_report(file: UploadFile = File(...)):
         Do NOT hardcode categories. ONLY create new key-value pairs inside "dynamic_fields" for extra medical data you ACTUALLY find in the text that doesn't fit the main categories (e.g., "BMI": "24.5", "Surgical History": "Appendectomy", "Blood Pressure": "120/80"). If there is no extra info, leave it as an empty object {{}}.
         """
 
-        # FORCE strict JSON output from Gemini
         response = client.models.generate_content(
             model="gemini-flash-lite-latest",
             contents=prompt,
             config=types.GenerateContentConfig(response_mime_type="application/json")
         )
 
-        # Directly load the JSON since we forced the mime_type
         parsed_data = json.loads(response.text.strip())
         print(f"Successfully extracted: {parsed_data}")
         return parsed_data

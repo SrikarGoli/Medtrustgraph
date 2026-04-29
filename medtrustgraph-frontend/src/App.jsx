@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import ForceGraph2D from 'react-force-graph-2d';
 import { AlertTriangle, Search, Activity, X, CheckCircle } from 'lucide-react';
 
@@ -30,6 +30,59 @@ export default function App() {
   const resultsRef = useRef(null);
 
   const [isReadingPdf, setIsReadingPdf] = useState(false);
+
+  // Load data from localStorage on component mount
+  useEffect(() => {
+    const savedPatientData = localStorage.getItem('patientData');
+    const savedQueryData = localStorage.getItem('queryData');
+    const savedGraphData = localStorage.getItem('graphData');
+    const savedRadarItems = localStorage.getItem('radarItems');
+    const savedDietPlan = localStorage.getItem('dietPlan');
+    const savedActiveTab = localStorage.getItem('activeTab');
+
+    if (savedPatientData) setPatientData(JSON.parse(savedPatientData));
+    if (savedQueryData) setQueryData(JSON.parse(savedQueryData));
+    if (savedGraphData) setGraphData(JSON.parse(savedGraphData));
+    if (savedRadarItems) setRadarItems(JSON.parse(savedRadarItems));
+    if (savedDietPlan) setDietPlan(JSON.parse(savedDietPlan));
+    if (savedActiveTab) setActiveTab(savedActiveTab);
+  }, []);
+
+  // Save patientData to localStorage whenever it changes
+  useEffect(() => {
+    localStorage.setItem('patientData', JSON.stringify(patientData));
+  }, [patientData]);
+
+  // Save queryData to localStorage whenever it changes
+  useEffect(() => {
+    if (queryData) {
+      localStorage.setItem('queryData', JSON.stringify(queryData));
+    }
+  }, [queryData]);
+
+  // Save graphData to localStorage whenever it changes
+  useEffect(() => {
+    if (graphData.nodes.length > 0 || graphData.links.length > 0) {
+      localStorage.setItem('graphData', JSON.stringify(graphData));
+    }
+  }, [graphData]);
+
+  // Save radarItems to localStorage whenever it changes
+  useEffect(() => {
+    localStorage.setItem('radarItems', JSON.stringify(radarItems));
+  }, [radarItems]);
+
+  // Save dietPlan to localStorage whenever it changes
+  useEffect(() => {
+    if (dietPlan) {
+      localStorage.setItem('dietPlan', JSON.stringify(dietPlan));
+    }
+  }, [dietPlan]);
+
+  // Save activeTab to localStorage whenever it changes
+  useEffect(() => {
+    localStorage.setItem('activeTab', activeTab);
+  }, [activeTab]);
 
 
   const scrollToResults = () => {
